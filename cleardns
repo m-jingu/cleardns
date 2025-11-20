@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# cleardns - Script to remove specified DNS servers from current network connections
+
+# DNS servers to remove
+DNS_TO_REMOVE=("10.10.127.1" "10.10.127.2")
+
+# Get currently active network services
+# Exclude the first line from networksetup -listallnetworkservices as it's a header
+ACTIVE_SERVICES=$(networksetup -listallnetworkservices | tail -n +2)
+
+# Track if any changes were made
+CHANGED=false
+
+# Process each network service
+while IFS= read -r service; do
+    # Skip empty lines
+    [[ -z "$service" ]] && continue
+    
+    # Get current DNS servers
+    CURRENT_DNS=$(networksetup -getdnsservers "$service" 2>/dev/null)
+    
+    # Error check (e.g., when DNS servers are not configured)
+    if [[ $? -ne 0 ]] || [[ "$CURRENT_DNS" == "There aren't any DNS Servers set on"* ]]; then
+        continue
+    fi
+    
+    # Convert DNS server list to array
+    DNS_ARRAY=()
+    while IFS= read -r dns; do
+        [[ -n "$dns" ]] && DNS_ARRAY+=("$dns")
+    done <<< "$CURRENT_DNS"
+    
+    # Check if target DNS servers are included
+    REMOVED=false
+    NEW_DNS_ARRAY=()
+    
+    for dns in "${DNS_ARRAY[@]}"; do
+        IS_TARGET=false
+        for target in "${DNS_TO_REMOVE[@]}"; do
+            if [[ "$dns" == "$target" ]]; then
+                IS_TARGET=true
+                REMOVED=true
+                break
+            fi
+        done
+        
+        if [[ "$IS_TARGET" == false ]]; then
+            NEW_DNS_ARRAY+=("$dns")
+        fi
+    done
+    
+    # Reconfigure DNS servers if targets were found
+    if [[ "$REMOVED" == true ]]; then
+        if [[ ${#NEW_DNS_ARRAY[@]} -eq 0 ]]; then
+            # Set Empty if all DNS servers will be removed
+            networksetup -setdnsservers "$service" Empty
+            echo "✓ $service: Removed all DNS servers (only target servers were configured)"
+        else
+            # Set remaining DNS servers
+            networksetup -setdnsservers "$service" "${NEW_DNS_ARRAY[@]}"
+            echo "✓ $service: Removed specified DNS servers"
+            echo "  Remaining DNS servers: ${NEW_DNS_ARRAY[*]}"
+        fi
+        CHANGED=true
+    fi
+    
+done <<< "$ACTIVE_SERVICES"
+
+# Display results
+if [[ "$CHANGED" == false ]]; then
+    echo "Target DNS servers (${DNS_TO_REMOVE[*]}) were not found."
+    exit 0
+else
+    echo ""
+    echo "Processing completed."
+    exit 0
+fi
+
